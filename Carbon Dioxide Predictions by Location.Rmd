@@ -1,0 +1,502 @@
+---
+title: "Carbon Dioxide Predictions by Location"
+author: "Hanna Grossman"
+date: "3/18/2020"
+output: pdf_document
+---
+
+# 1. Introduction
+
+Through this project, I will explore one of the National Oceanic and Atmospheric Administration's data sets, focusing in on carbon cycle research. This dataset contains data measurements collected from the Barnett Shale region of Texas. These variables include latitude, longitude, altitude, and height that each measurment was taken. The measurements include the mole fraction of CH4, CO, CO2, and Ethane in dry air. The air pressure and temperature were also recorded for each observation. I will begin with an exploratory analysis of each variable mentioned above. This will include summary statistics, histograms, scatterplots, variance covariance matrices, correlation matrices, and bubble plots. I will also compute sample variograms for each variable and fit theoretical variograms to them. In addition, I will compute cross-semivariograms for pairs of variables. From there, I will next focus in on the target variable, or variable interest, carbon dioxide (CO2). I chose this variable as the target variable, because this data was collected for the purpose of researching the carbon cycle, and I therefore believe predicting the amount of CO2 based on location, and other co-located variables, may prove quite interesting and directly align with the purpose of this data collection. With this variable, I will cross validate to find which model variogram is the best fit. Through this process, I find that the spherical model is the best fit for the CO2 variable, as it results in a lower PRESS when compared to the exponential and linear models during cross validation. From there, I perform ordinary kriging, universal kriging, and co-kriging in order to predict our CO2 variable. For co-kriging, I use carbon monoxide (CO), as the co-located variable. After performing these three types of kriging, I then use cross validation to compare the three methods to each other. I find that co-kriging performs best, and therefore this will be my chosen method of kriging to allow for predicting the CO2 variable. From there, I construct both a raster map of the predicted values, and a raster map of the kriging variances, both with contours, for my chosen method, co-kriging. In the end, I am able to gain a strong understanding of the data as a whole through the exploratory data analysis and variograms. I successfully predict carbon dioxide values in the Barnett Shale region of Texas, using an spherical model to fit the sample variogram, and co-kriging to compute my predictions. Finally, through examining the raster map of predicted values, I observe that the lowest carbon dioxide levels are found in the southwest area of the Barnett Shale region of Texas, while the highest carbon dioxide levels are found in the northeast and central east areas of the Texas region. I also observe through the raster map of variances that there is greater variance in some of the darker orange areas, for example around longitude -97.5 and latitude 32.5.  
+
+# 2. Data
+
+## Data source  
+The data used in this study can be found through the National Oceanic and Atmospheric Administration (NOAA) website, through the Earth System Research Laboratory Global Monitoring Division (ESRL/GMD) Data Finder. The link to the data is cited below, and the data will also be submitted along with this report. 
+
+https://www.esrl.noaa.gov/gmd/dv/data/index.php?search=coordinate
+
+## Describing data   
+This dataset consists of airborne measurements, taken in the Barnett Shale region of Texas. These measurements were taken to allow for carbon-cycle research. The measurements include the longitude and latitude (renamed x and y in the data cleaning step) that the measurements were taken, the altitude and intake height of each measurement, the mole fraction of CH4, CO, CO2, and Ethane in dry air, and the air pressure and air temperature at each measurement location.  
+
+## Exploratory data analysis 
+### Performing non-spatial analysis of data
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#Below, I read in, clean, and subset the data before begining my analysis.
+
+#libraries
+library(dplyr)
+#library(geoR)
+library(gstat)
+library(maps)
+
+#reading in and cleaning the data: 
+Barnett <- read.table("Barnett_Obs_30s_8flights/Barnett_Obs_30s_8flights.txt", 
+                      quote="\"")
+colnames(Barnett) <- c("year", "month", "day", "hour", "minute", "second", 
+                       "time", "y", "x", "altitude",
+                       "intake_height", "CH4", "CH4_unc", "CH4_stdv", 
+                       "CO", "CO_unc", "CO_stdv", "CO2", "CO2_unc", 
+                       "CO2_stdv", "Ethane", "Ethane_unc", "Ethane_stdv", 
+                       "P", "P_unc", "T", "T_unc", "u", "u_unc", "v", "v_unc")
+
+#keeping only unique locations
+counts <- Barnett %>% group_by(x,y) %>% count %>% 
+  arrange(desc(n))
+Barnett_unique <- distinct(Barnett, y, x, .keep_all= TRUE)
+counts_unique <- Barnett_unique %>% group_by(x, y) %>% 
+  count %>% arrange(desc(n))
+
+#removing incorrect values from data 
+Barnett_unique$CH4 <- ifelse(Barnett_unique$CH4<0, NA, Barnett_unique$CH4)
+Barnett_unique$CO <- ifelse(Barnett_unique$CO<0, NA, Barnett_unique$CO)
+Barnett_unique$CO2 <- ifelse(Barnett_unique$CO2<0, NA, Barnett_unique$CO2)
+Barnett_unique$Ethane <- ifelse(Barnett_unique$Ethane<0, NA, Barnett_unique$Ethane)
+Barnett_unique <- na.omit(Barnett_unique)
+
+#choosing 1000 observations
+set.seed(10)
+Barnett_sub <- Barnett_unique[sample(1:4040, size=1000, replace=FALSE),]
+
+#subsetting data to only keep variables of interest
+Barnett_sub <- Barnett_sub[,c("x", "y", "altitude", "intake_height", "CH4", "CO", "CO2", "Ethane", "P", "T")]
+```
+
+Descriptive statistics:
+```{r}
+summary(Barnett_sub$x)
+summary(Barnett_sub$y)
+summary(Barnett_sub$altitude)
+summary(Barnett_sub$intake_height)
+summary(Barnett_sub$CH4)
+summary(Barnett_sub$CO)
+summary(Barnett_sub$CO2)
+summary(Barnett_sub$Ethane)
+summary(Barnett_sub$P)
+summary(Barnett_sub$T)
+```
+
+Histograms 
+```{r, echo=FALSE, out.width = '50%'}
+#histograms
+library(ggplot2)
+Barnett_sub %>% ggplot(aes(x=altitude)) + 
+  geom_histogram(bins=15, col="black", fill="light blue")
+Barnett_sub %>% ggplot(aes(x=intake_height)) + 
+  geom_histogram(bins=15, col="black", fill="light blue")
+Barnett_sub %>% filter(CH4>0) %>% ggplot(aes(x=CH4)) + 
+  geom_histogram(bins=15, col="black", fill="light blue")
+Barnett_sub %>% filter(CO>0) %>% ggplot(aes(x=CO)) + 
+  geom_histogram(bins=15, col="black", fill="light blue")
+Barnett_sub %>% filter(CO2>0) %>% ggplot(aes(x=CO2)) + 
+  geom_histogram(bins=15, col="black", fill="light blue")
+Barnett_sub%>% filter(Ethane>0) %>% ggplot(aes(x=Ethane)) + 
+  geom_histogram(bins=15, col="black", fill="light blue")
+Barnett_sub %>% ggplot(aes(x=P)) + 
+  geom_histogram(bins=15, col="black", fill="light blue")
+Barnett_sub %>% ggplot(aes(x=T)) + 
+  geom_histogram(bins=15, col="black", fill="light blue")
+```
+
+Scatterplots
+```{r, echo=FALSE, out.width = '50%'}
+#scatterplots between altitude and variables we are interested in predicting
+ Barnett_sub %>% ggplot(aes(x=altitude, y=CH4)) + 
+   geom_point(col="light blue")
+ Barnett_sub %>% ggplot(aes(x=altitude, y=CO)) + 
+   geom_point(col="light blue")
+ Barnett_sub %>% ggplot(aes(x=altitude, y=CO2)) + 
+   geom_point(col="light blue")
+ Barnett_sub %>% ggplot(aes(x=altitude, y=Ethane)) + 
+   geom_point(col="light blue")
+ Barnett_sub %>% ggplot(aes(x=altitude, y=P)) + 
+   geom_point(col="light blue")
+ Barnett_sub %>% ggplot(aes(x=altitude, y=T)) + 
+   geom_point(col="light blue")
+ 
+#scatterplots between intake height and variables we are interested in predicting
+par(mfrow=c(3,2))
+  Barnett_sub %>% ggplot(aes(x=intake_height, y=CH4)) + 
+   geom_point(col="navy blue")
+ Barnett_sub %>% ggplot(aes(x=intake_height, y=CO)) + 
+   geom_point(col="navy blue")
+ Barnett_sub %>% ggplot(aes(x=intake_height, y=CO2)) + 
+   geom_point(col="navy blue")
+ Barnett_sub %>% ggplot(aes(x=intake_height, y=Ethane)) + 
+   geom_point(col="navy blue")
+ Barnett_sub %>% ggplot(aes(x=intake_height, y=P)) + 
+   geom_point(col="navy blue")
+ Barnett_sub %>% ggplot(aes(x=intake_height, y=T)) + 
+   geom_point(col="navy blue")
+```
+
+Variance covariance matrix
+```{r, echo=FALSE}
+#variance covariance and correlation matrix
+mat <- Barnett_sub[,c("altitude", "intake_height", "CH4", "CO", "CO2", 
+                      "Ethane", "P", "T")]
+cov(mat)
+```
+
+Correlation matrix 
+```{r, echo=FALSE}
+cor(mat)
+```
+
+### Creating circle (bubble) plots to show the data against the coordinates 
+```{r, echo=FALSE, out.width = '50%'}
+#altitude 
+#summary(Barnett_sub$altitude)
+altitude_colors <- c("light blue", "cyan", "blue", "navy blue")
+altitude_levels <- cut(Barnett_sub$altitude, c(200, 600, 800, 1000,3050))
+plot(Barnett_sub$x, Barnett_sub$y, ylab="Latitude", xlab="Longitude", main="Altitude", cex= Barnett_sub$altitude/mean(Barnett_sub$altitude), col=altitude_colors[as.numeric(altitude_levels)])
+
+#intake_height
+#summary(Barnett_sub$intake_height)
+intake_height_colors <- c("light blue", "cyan", "blue", "navy blue")
+intake_height_levels <- cut(Barnett_sub$intake_height, c(0, 400, 600, 800, 2800))
+plot(Barnett_sub$x, Barnett_sub$y, ylab="Latitude", xlab="Longitude", main="Intake Height", cex= Barnett_sub$intake_height/mean(Barnett_sub$intake_height), col=intake_height_colors[as.numeric(intake_height_levels)])
+
+#CH4
+#summary(Barnett_sub$CH4)
+CH4_colors <- c("light blue", "cyan", "blue", "navy blue")
+CH4_levels <- cut(Barnett_sub$CH4, c(1800, 1940, 1960, 1980,2450))
+plot(Barnett_sub$x, Barnett_sub$y, ylab="Latitude", xlab="Longitude", main="CH4", cex= Barnett_sub$CH4/mean(Barnett_sub$CH4), col=CH4_colors[as.numeric(CH4_levels)])
+
+#CO
+#summary(Barnett_sub$CO)
+CO_colors <- c("light blue", "cyan", "blue", "navy blue")
+CO_levels <- cut(Barnett_sub$CO, c(76, 120, 135, 150,205))
+plot(Barnett_sub$x, Barnett_sub$y, ylab="Latitude", xlab="Longitude", main="CO", cex= Barnett_sub$CO/mean(Barnett_sub$CO), col=CO_colors[as.numeric(CO_levels)])
+
+#CO2
+#summary(Barnett_sub$CO2)
+CO2_colors <- c("light blue", "cyan", "blue", "navy blue")
+CO2_levels <- cut(Barnett_sub$CO2, c(390, 397, 400, 403,415))
+plot(Barnett_sub$x, Barnett_sub$y, ylab="Latitude", xlab="Longitude", main="CO2", cex= Barnett_sub$CO2/mean(Barnett_sub$CO2), col=CO2_colors[as.numeric(CO2_levels)])
+
+#Ethane
+#summary(Barnett_sub$Ethane)
+Ethane_colors <- c("light blue", "cyan", "blue", "navy blue")
+Ethane_levels <- cut(Barnett_sub$Ethane, c(1, 4, 5.5, 7, 22))
+plot(Barnett_sub$x, Barnett_sub$y, ylab="Latitude", xlab="Longitude", main="Ethane", cex= Barnett_sub$Ethane/mean(Barnett_sub$Ethane), col=Ethane_colors[as.numeric(Ethane_levels)])
+
+#P
+#summary(Barnett_sub$CO2)
+CO2_colors <- c("light blue", "cyan", "blue", "navy blue")
+CO2_levels <- cut(Barnett_sub$CO2, c(390, 397, 400, 403,415))
+plot(Barnett_sub$x, Barnett_sub$y, ylab="Latitude", xlab="Longitude", main="CO2", cex= Barnett_sub$CO2/mean(Barnett_sub$CO2), col=CO2_colors[as.numeric(CO2_levels)])
+
+#T
+#summary(Barnett_sub$T)
+T_colors <- c("light blue", "cyan", "blue", "navy blue")
+T_levels <- cut(Barnett_sub$T, c(230, 285, 290, 295,302))
+plot(Barnett_sub$x, Barnett_sub$y, ylab="Latitude", xlab="Longitude", main="T", cex= Barnett_sub$T/mean(Barnett_sub$T), col=T_colors[as.numeric(T_levels)])
+```
+
+# 3. Methodology
+The methodology is listed in steps below, along with an explanation of each step. The results for steps 2 and 3 can be found above in the data section, and the results for steps 4-10 can be found below in the results section. These results consist of both output and plots.   
+
+1. Reading in, cleaning, and subsetting data  
+After reading in the data, and renaming the columns to their correct names, I then filter the data to keep only unique locations. I use the distinct function to keep only one observation for each location. From there, I remove all negative values for CH4, CO, CO2, and Ethane. Because these variables are measurements of how much each of these chemical compunds are found in a given location, they cannot be negative, and negative values therefore are values that were inputted incorrectly. Finally, I take a random sample of 1000 observations to end up with a manageable dataset, and keep only the columns I will use throughout my analysis. 
+
+2. Non-spatial analysis of data  
+I next perform a non-spatial analysis of the data in order to better understand what the data look like, and to see how this may impact the rest of my analysis. This exploratory analysis consists of descripive statistics using the summary function, histograms of each variable. I also plot scatterplots with altitude and intake height as the x variables, and CH4, CO, CO2, and Ethane, the variables measured in the data set, as the y variables. This allows me to see if the amounts of these chemical compounds are affected by the altitude and height of the location. Finally, I compute the variance covariance matrix and the correlation matrix to better understand how the variables are related to one another. 
+
+3. Creating circle (bubble) plots to show the data against the coordinates  
+In this step, I create plots with the x axis as longitude, and the y axis as latitude. I make each point a color based on where its value is compared to each variables' (altitude, intake height, CH4, CO, CO2, ethane, air pressure, air temperature) min, Q1, median, Q3, and max. I also change the size of each point based on how the value of each point compares to the mean of that variable. These plots can be found above in the data section as well. 
+
+4. Computing semivariograms for all variables  
+In this step, I compute semivariograms for each variable. These variables include: altitutde, intake height, methane (CH4), carbon monoxide (CO), carbon dioxide (CO2), ethane, air pressure (P), and air temperature (T). In order to compute the variograms, I use the package gstat, with functions gstat, variogram, fit.variogram, and plot. To find the best fit, I try transforming variables, for example using a log transformation, using different directions for the variograms, and removing trends. I also try fitting different theoretical models to each variogram, including spherical, gaussian, exponential, and linear. You can see how I end up plotting each variogram specifically in the code show below in the results section. 
+
+5. Computing cross-semivariograms for pairs of variables  
+To compute cross-semivariograms for pairs of variables, I once again use the gstat packages with functions gstat, variogram, fit.lmc, and plot. I plot variables that seem to compute the best cross-semivariograms together. This includes altitude with intake height, CO with CO2, CH4 with ethane, and air pressure with air temperature. 
+
+6. Choosing a target variable to focus in on  
+After completing the exploratory data analysis and computing the variograms for each variable, along with gaining an understanding for the dataset, I chose a target variable to focus in on, CO2. Since this data was collected for the purpose of researching the carbon cycle, I am choosing to focus in on the variable Carbon Dioxide (CO2). Predicting the amount of CO2 based on location may prove to be quite interesting, and will directly align with the purpose of this data collection. I will see how carbon dioxide varies depending on location, and if this allows me to predict the variable well based on a given location. In addition, I will be able to explore how other variables, for example carbon monoxide, improve my predictions of carbon dioxide. 
+
+7. Performing cross validation to choose best model variogram
+   - Dividing the data set into two parts - one for modeling and one for cross validations  
+   I begin by dividing the dataset into two, a training and a validation set. The training set contains 70% of the data, or 700 of the 1,000 observations, and the validation set contains the other 30% of the data. From there, I plot the sample variogram using the training dataset, and then fit the spherical, exponential, and linear models to the sample variogram. Next, I use the krige function to find the predicted values for CO2 using each of the three models. Finally, I compute the PRESS for each model, by calculating the sum of squared differences between the true CO2 values and the predicted CO2 values. The best fit model is the one with the lowest PRESS. Therefore, through cross validation I am able to find which model is the best fitting and proceed using this model type. 
+   
+8. Performing ordinary, universal, and co-kriging, using CO as the co-located variable for co-kriging  
+I perform ordinary and universal kriging using the krige function. For ordinary kriging, I specify that formula=CO2~1, while for universal kriging, I specify that formula=CO2~x+y. I am then able to view the predictions made through each form of kriging looking at CO2.pred, produced by the krige function. To perform co-kriging, I use the predict function, with the vm.fit and grid objects I create previously. I once again can view the predictions by looking at CO2.pred, produced by the predict function.  
+
+9. Performing cross validation to choose which type of kriging performs best  
+After performing ordinary, universal, and co-kriging, I perform cross validation to find which type of kriging is best. I use krige.cv to find the sum of squared residuals for ordinal and universal kriging, and I use gstat.cv to find the sum of squared residuals for co-kriging. The method with the lowest sum of squared residuals therefore performs the best, and is the method of kriging I will choose to move forward with, using the CO2 predictions found through this method.  
+
+10. Constructing a raster map of the predicted values and a raster map of the kriging variances, adding contours to these maps, using the method of kriging that performs best above  
+Finally, I construct raster maps of the predicted values and of the kriging variances, first by collapsing the predicted values, or the variances, into a matrix. I then use the image function to create the initial image, and then use the contour function to add in the contours. Finally, for the raster map of the predicted values, I graph the points using the points function. I do this all for co-kriging, with the spherical model, as we found these perform best through cross validation.   
+
+# 4. Results
+
+## Computing semivariograms for all variables 
+```{r, out.width = '50%', fig.align = "center"}
+#altitude
+g1 <- gstat(id="altitude", formula=altitude~1, locations=~x+y,
+            data=Barnett_sub)
+vario1 <- variogram(g1)
+v.fit1 <- fit.variogram(vario1, vgm(psill=100000, model="Sph", 
+                                           range=0.5, nugget=75000), fit.method=6)
+plot(vario1, v.fit1)
+
+#intake height
+g2 <- gstat(id="intake_height", formula=intake_height~1,
+            locations=~x+y, data=Barnett_sub)
+vario2 <- variogram(g2)
+v.fit2 <- fit.variogram(vario2, vgm(psill=100000, model="Sph", 
+                                           range=0.5, nugget=75000), fit.method=6)
+plot(vario2, v.fit2)
+
+#CH4
+g3 <- gstat(id="CH4", formula=CH4~1,
+            locations=~x+y, data=Barnett_sub)
+vario3 <- variogram(g3)
+v.fit3 <- fit.variogram(vario3, vgm(psill=1250, model="Sph", 
+                                           range=1, nugget=1500), fit.method=6)
+plot(vario3, v.fit3)
+
+#CO
+g4 <- gstat(id="CO", formula=CO~1,
+            locations=~x+y, data=Barnett_sub)
+vario4 <- variogram(g4, cutoff=0.9)
+v.fit4 <- fit.variogram(vario4, vgm(psill=300, model="Sph", 
+                                           range=0.5, nugget=100), fit.method=6)
+plot(vario4, v.fit4)
+
+#CO2
+g5 <- gstat(id="CO2", formula=CO2~x+y,
+            locations=~x+y, data=Barnett_sub)
+vario5 <- variogram(g5)
+v.fit5 <- fit.variogram(vario5, vgm(psill=4.5, model="Sph", 
+                                           range=.5, nugget=7.5), fit.method=6)
+plot(vario5, v.fit5)
+
+#Ethane
+g6 <- gstat(id="Ethane", formula=Ethane~x+y, locations=~x+y, data=Barnett_sub)
+vario6 <- variogram(g6, cutoff=1.25)
+v.fit6 <- fit.variogram(vario6, vgm(psill=3.2, model="Sph", 
+                                           range=1, nugget=2), fit.method=6)
+plot(vario6, v.fit6)
+
+#P
+g7 <- gstat(id="P", formula=P~1, locations=~x+y, data=Barnett_sub)
+vario7 <- variogram(g7, cutoff=1.25)
+v.fit7 <- fit.variogram(vario7, vgm(psill=1.5e+07, model="Sph", 
+                                           range=0.75, nugget=5e+06), fit.method=6)
+plot(vario7, v.fit7)
+
+#T
+g8 <- gstat(id="T", formula=T~1, locations=~x+y, data=Barnett_sub)
+vario8 <- variogram(g8)
+v.fit8 <- fit.variogram(vario8, vgm(psill=900, model="Gau", 
+                                           range=1, nugget=400), fit.method=6)
+plot(vario8, v.fit8)
+```
+
+## Computing cross-semivariograms for each pair of variables
+```{r, echo=FALSE, out.width = '50%'}
+#altitude and intake_height
+g12 <- gstat(id="altitude", formula=altitude~1, locations=~x+y,
+            data=Barnett_sub)
+g12 <- gstat(g12,id="intake_height", formula=intake_height~1,
+            locations=~x+y, data=Barnett_sub)
+vm <- variogram(g12)
+vm.fit <- fit.lmc(vm, g12, model=v.fit1)
+plot(vm, vm.fit)
+
+#CO and CO2
+g45 <- gstat(id="CO2", formula=CO2~x+y,
+            locations=~x+y, data=Barnett_sub)
+g45 <- gstat(g45,id="CO", formula=CO~1,
+            locations=~x+y, data=Barnett_sub)
+vm <- variogram(g45, cutoff=0.9)
+vm.fit <- fit.lmc(vm, g45, model=v.fit5)
+plot(vm, vm.fit)
+
+#CH4 and Ethane 
+g36 <- gstat(id="CH4", formula=CH4~1,
+            locations=~x+y, data=Barnett_sub)
+g36 <- gstat(g36,id="Ethane", formula=Ethane~x+y, locations=~x+y, data=Barnett_sub)
+vm <- variogram(g36, cutoff=1.25)
+vm.fit <- fit.lmc(vm, g36, model=v.fit6)
+plot(vm, vm.fit)
+
+#P and T 
+g78 <- gstat(id="P", formula=P~1, locations=~x+y, data=Barnett_sub)
+g78 <- gstat(g78, id="T", formula=T~1, locations=~x+y, data=Barnett_sub)
+vm <- variogram(g78, cutoff=1)
+vm.fit <- fit.lmc(vm, g78, model=v.fit7)
+plot(vm, vm.fit)
+```
+
+## Performing cross validation to choose between different types of model variograms
+
+### Cross validation: dividing the data set into two parts - one for modeling and one for cross validations
+
+```{r, echo=FALSE}
+set.seed(1234567899)
+sampled <- sample(1:1000, 700)
+part_model <- Barnett_sub[sampled,]
+part_valid <- Barnett_sub[-sampled,]
+
+g <- gstat(id="CO2", formula=CO2~x+y,
+           locations=~x+y, data=part_model)
+vario <- variogram(g)
+```
+
+```{r, out.width = '50%', fig.align = "center"}
+#spherical variogram
+v.fit_sph <- fit.variogram(vario, vgm(psill=4.5, model="Sph", 
+                                      range=.5, nugget=7.5), fit.method=6)
+plot(vario, v.fit_sph)
+
+#exponential variogram
+v.fit_exp <- fit.variogram(vario, vgm(psill=4.5, model="Exp", 
+                                      range=.5, nugget=7.5), fit.method=6)
+plot(vario, v.fit_exp)
+
+#linear variogram
+v.fit_lin <- fit.variogram(vario, vgm(psill=4.5, model="Lin", 
+                                      range=.5, nugget=7.5), fit.method=6)
+plot(vario, v.fit_lin)
+```
+
+
+```{r, echo=FALSE}
+#PRESS calculation - spherical
+part_valid_pr_sph <- krige(id="CO2", CO2~1, locations=~x+y, model=v.fit_sph, data=part_model, newdata=part_valid)
+head(part_valid_pr_sph$CO2.pred)
+difference_sph <- part_valid$CO2 - part_valid_pr_sph$CO2.pred 
+#summary(difference_sph)
+press_sph <- sum(difference_sph^2)
+
+#PRESS calculation - exponential
+part_valid_pr_exp <- krige(id="CO2", CO2~1, locations=~x+y, model=v.fit_exp, data=part_model, newdata=part_valid)
+head(part_valid_pr_exp$CO2.pred)
+difference_exp <- part_valid$CO2 - part_valid_pr_exp$CO2.pred 
+#summary(difference_exp)
+press_exp <- sum(difference_exp^2)
+
+#PRESS calculation - linear
+part_valid_pr_lin <- krige(id="CO2", CO2~1, locations=~x+y, model=v.fit_lin, data=part_model, newdata=part_valid)
+head(part_valid_pr_lin$CO2.pred)
+difference_lin <- part_valid$CO2 - part_valid_pr_lin$CO2.pred 
+#summary(difference_lin)
+press_lin <- sum(difference_lin^2)
+
+cat(c("PRESS for spherical model:", press_sph))
+cat(c("PRESS for exponential model:", press_exp))
+cat(c("PRESS for linear model:", press_lin))
+```
+
+After performing cross validation, I choose the spherical model, as it results in a lower PRESS when compared to the exponential and linear models.
+
+## Setting Up for Krigging 
+### Constructing the grid for kriging predictions
+```{r, echo=FALSE, out.width = '50%', fig.align = "center"}
+a <- Barnett_sub[,c("x", "y", "CO2")]
+x_range <- as.integer(range(a[,1]))
+y_range <- c(31.5,35)
+grid <- expand.grid(x=seq(from=x_range[1], to=x_range[2], by=0.05),
+                    y=seq(from=y_range[1], to=y_range[2], by=0.05))
+plot(grid, cex=0.1)
+points(a)
+```
+
+### Fitting the spherical variogram for the CO2 variable  
+```{r, echo=FALSE, out.width = '50%', fig.align = "center"}
+g <- gstat(id="CO2", formula=CO2~x+y,
+           locations=~x+y, data=a)
+vario <- variogram(g)
+v.fit <- fit.variogram(vario, vgm(psill=4.5, model="Sph", 
+                                      range=.5, nugget=7.5), fit.method=6)
+plot(vario, v.fit)
+```
+
+## Performing ordinary kriging
+```{r, echo=FALSE}
+pr_ok <- krige(id="CO2", CO2~1, locations=~x+y, model=v.fit, data=a, newdata=grid)
+cat("head of predictions for ordinary kriging:")
+head(pr_ok$CO2.pred)
+```
+
+## Performing universal kriging
+```{r, echo=FALSE}
+pr_uk <- krige(id="CO2", CO2~x+y, locations=~x+y, model=v.fit, data=a, newdata=grid)
+cat("head of predictions for universal kriging:")
+head(pr_uk$CO2.pred)
+```
+
+## Performing co-kriging
+```{r, echo=FALSE}
+g45 <- gstat(id="CO2", formula=CO2~x+y,
+             locations=~x+y, data=Barnett_sub)
+g45 <- gstat(g45,id="CO", formula=CO~1,
+             locations=~x+y, data=Barnett_sub)
+vm <- variogram(g45, cutoff=0.9)
+vm.fit <- fit.lmc(vm, g45, model=v.fit5)
+
+ck <- predict(vm.fit, grid)
+cat("head of predictions for co-kriging:")
+head(ck$CO2.pred)
+```
+
+## Performing cross validation to choose between types of kriging 
+```{r, echo=FALSE, message=FALSE}
+set.seed(10)
+
+#Ordinary kriging:
+cv_pr_ok <- krige.cv(CO2~1,data=a, locations=~x+y, model=v.fit,nfold=nrow(a))
+
+#Universal kriging:
+cv_pr_uk <- krige.cv(CO2~x+y,data=a, locations=~x+y, model=v.fit, nfold=nrow(a))
+
+#Co-kriging:
+cv_pr_ck <- gstat.cv(vm.fit, verbose=FALSE, debug.level =0)
+
+cat(c("the sum of squared residuals for ordinary kriging:",  sum(cv_pr_ok$residual^2)))
+cat(c("the sum of squared residuals for universal kriging:",  sum(cv_pr_uk$residual^2)))
+cat(c("the sum of squared residuals for co-kriging:",  sum(cv_pr_ck$residual^2)))
+```
+From the cross validation above, we see that co-kriging performs best by far. The next best is universal kriging, and finally, ordinary kriging. 
+
+## Constructing a raster map of the predicted values and a raster map of the kriging variances, adding contours to these maps
+I construct the raster maps using co-kriging, as we see above through cross validation that this method performs best. 
+```{r, echo=FALSE, out.width = '50%', fig.align = "center"}
+#raster map of the predicted values 
+qqq <- matrix(ck$CO2.pred,
+              length(seq(from=x_range[1], to=x_range[2], by=0.05)),
+              length(seq(from=y_range[1], to=y_range[2], by=0.05)))
+
+image(seq(from=x_range[1], to=x_range[2], by=0.05),
+      seq(from=y_range[1], to=y_range[2], by=0.05), qqq, xlab="West to East", ylab="South to North",
+      main="Predicted Values")
+
+#range(ck$CO2.pred)
+contour(seq(from=x_range[1], to=x_range[2], by=0.05), 
+        seq(from=y_range[1],to=y_range[2], by=0.05), qqq, add=TRUE, col="black", 
+        levels=seq(394.5489, 406.3172, by=0.5), labcex=1)
+
+points(Barnett_sub$x, Barnett_sub$y, cex=Barnett_sub$CO2/mean(Barnett_sub$CO2)/2, pch=19)
+
+
+#raster map of the kriging variances 
+qqq <- matrix(ck$CO2.var,
+              length(seq(from=x_range[1], to=x_range[2], by=0.05)),
+              length(seq(from=y_range[1], to=y_range[2], by=0.05)))
+
+image(seq(from=x_range[1], to=x_range[2], by=0.05),
+      seq(from=y_range[1], to=y_range[2], by=0.05), qqq, xlab="West to East", ylab="South to North",
+      main="Variances")
+
+#range(ck$CO2.var)
+contour(seq(from=x_range[1], to=x_range[2], by=0.05), 
+        seq(from=y_range[1],to=y_range[2], by=0.05), qqq, add=TRUE, col="black", 
+        levels=seq(7.20270, 12.72265, by=0.5), labcex=1)
+```
+
+# 5. Conclusion 
+Through the raster map above of predicted values, we see that the lowest carbon dioxide levels are found in the southwest area of the Barnett Shale region of Texas. Then moving in a diagonal direction, we see that the highest carbon dioxide levels are found in the northeast and central east areas of the Texas region. It is important to note that we should only be predicting carbon dioxide levels within the scope of our data, as kriging is an interpolator and not an extrapolator. We see through our raster map of variances that there is greater variance in some of the darker orange areas, for example around longitude -97.5 and latitude 32.5. Of course, the variance is high in the red areas, as there are no data there.   
+In conclusion, through this project, I am able to gain a strong understanding of the data as a whole through the exploratory data analysis and variograms. I am then able to predict carbon dioxide levels through co-kriging, using the latitude, longitude, and CO variables.  
